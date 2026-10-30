@@ -628,7 +628,6 @@ namespace MemSweep.UI
             alpha = 0;
             ticks = 60;
             phase = 0;
-            UpdateRegion();
             Visible = true;
             BringToFront();
             if (t == null)
@@ -666,30 +665,16 @@ namespace MemSweep.UI
             base.WndProc(ref m);
         }
 
-        protected override void OnResize(EventArgs e)
-        {
-            base.OnResize(e);
-            UpdateRegion();
-        }
-
-        /// <summary>把控件裁成胶囊形,否则圆角外的方形底会露出一个矩形框。</summary>
-        private void UpdateRegion()
-        {
-            if (Width <= 0 || Height <= 0) return;
-            using (GraphicsPath p = Ui.Round(new RectangleF(0, 0, Width, Height), Height / 2f))
-            {
-                Region old = Region;
-                Region = new Region(p);
-                if (old != null) old.Dispose();
-            }
-        }
-
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            using (var b = new SolidBrush(BackColor)) g.FillRectangle(b, ClientRectangle);
+
+            // 提示条浮在底部图表卡上,先用卡片底色铺满整个控件矩形,
+            // 再画抗锯齿胶囊——这样圆角边缘会和背景平滑融合,没有 Region 裁剪产生的锯齿毛边。
+            using (var b = new SolidBrush(Theme.Card)) g.FillRectangle(b, ClientRectangle);
 
             int a = alpha;
             Color bg = Theme.Dark ? Color.FromArgb(a, 38, 44, 54) : Color.FromArgb(a, 26, 29, 33);
