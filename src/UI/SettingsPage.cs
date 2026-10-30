@@ -30,7 +30,7 @@ namespace MemSweep.UI
 
         private Toggle tgAuto, tgAutoStart, tgStartMin;
         private TextBox tbInterval, tbInit, tbMax;
-        private Segmented segLevel, segLang, segTheme;
+        private Segmented segLevel, segLang, segTheme, segAutoMode;
         private FlatButton btnRec, btnApply;
 
         private int scrollY;
@@ -68,6 +68,14 @@ namespace MemSweep.UI
                 main.SetAuto(tgAuto.Checked, v);
             };
             content.Controls.Add(tbInterval);
+
+            segAutoMode = new Segmented(); content.Controls.Add(segAutoMode);
+            segAutoMode.Changed += delegate
+            {
+                if (loading) return;
+                main.SetAutoMode(segAutoMode.Selected == 1);
+                Rebuild();
+            };
 
             tgAutoStart = new Toggle(); content.Controls.Add(tgAutoStart);
             tgAutoStart.CheckedChanged += delegate
@@ -127,7 +135,7 @@ namespace MemSweep.UI
             };
 
             // 子控件的滚轮统一转给页面
-            foreach (Control c in new Control[] { content, tgAuto, tgAutoStart, tgStartMin, segLevel, segLang, segTheme, btnRec, btnApply })
+            foreach (Control c in new Control[] { content, tgAuto, tgAutoStart, tgStartMin, segLevel, segLang, segTheme, segAutoMode, btnRec, btnApply })
                 c.MouseWheel += OnChildWheel;
             tbInterval.MouseWheel += OnChildWheel;
             tbInit.MouseWheel += OnChildWheel;
@@ -156,9 +164,11 @@ namespace MemSweep.UI
             segLevel.Items = new string[] { I18n.T("level.light"), I18n.T("level.standard"), I18n.T("level.deep") };
             segLang.Items = new string[] { "中文", "English" };
             segTheme.Items = new string[] { I18n.T("theme.light"), I18n.T("theme.dark") };
+            segAutoMode.Items = new string[] { I18n.T("mode.interval"), I18n.T("mode.smart") };
             segLevel.Invalidate();
             segLang.Invalidate();
             segTheme.Invalidate();
+            segAutoMode.Invalidate();
             btnRec.Text = I18n.T("setting.pagefile.use");
             btnApply.Text = I18n.T("setting.pagefile.apply");
         }
@@ -206,6 +216,7 @@ namespace MemSweep.UI
             try
             {
                 tgAuto.SetSilent(St.AutoOptimize);
+                segAutoMode.SetSilent(St.SmartTrigger ? 1 : 0);
                 tbInterval.Text = St.AutoInterval.ToString(CultureInfo.InvariantCulture);
                 tgAutoStart.SetSilent(Settings.IsAutoStartOn());
                 tgStartMin.SetSilent(St.StartMinimized);
@@ -295,7 +306,7 @@ namespace MemSweep.UI
                 tb.ForeColor = Theme.Text;
                 tb.Font = Theme.F(9.5f, FontStyle.Regular);
             }
-            foreach (Control c in new Control[] { tgAuto, tgAutoStart, tgStartMin, segLevel, segLang, segTheme })
+            foreach (Control c in new Control[] { tgAuto, tgAutoStart, tgStartMin, segLevel, segLang, segTheme, segAutoMode })
                 c.BackColor = Theme.Card;
             btnRec.BackColor = Theme.Card;
             btnApply.BackColor = Theme.Card;
@@ -330,20 +341,41 @@ namespace MemSweep.UI
             int padIn = Ui.Px(18);
 
             // ---- 自动优化 ----
-            int hA = Ui.Px(156);
+            // 卡片高度按当前模式内容决定,避免定时模式下方留空
+            int hA = St.SmartTrigger ? Ui.Px(188) : Ui.Px(202);
             cards.Add(new Rectangle(pad, y, w, hA));
             AddText(I18n.T("setting.auto"), pad + padIn, y + Ui.Px(16), w - padIn * 2 - Ui.Px(120), Ui.Px(24), 10.5f, FontStyle.Bold, Theme.Text, false, false);
             int tgX = pad + w - padIn - Ui.Px(44);
             tgAuto.SetBounds(tgX, y + Ui.Px(15), Ui.Px(44), Ui.Px(24));
             AddText(I18n.T("setting.enable"), tgX - Ui.Px(8) - Ui.Px(56), y + Ui.Px(15), Ui.Px(56), Ui.Px(24), 9f, FontStyle.Regular, Theme.Sub, false, false);
-            AddText(I18n.T("setting.interval"), pad + padIn, y + Ui.Px(54), Ui.Px(120), Ui.Px(24), 9.5f, FontStyle.Regular, Theme.Sub, false, false);
-            frames.Add(new Rectangle(pad + w - padIn - Ui.Px(110), y + Ui.Px(48), Ui.Px(110), Ui.Px(34)));
-            tbInterval.SetBounds(pad + w - padIn - Ui.Px(110) + Ui.Px(10), y + Ui.Px(56), Ui.Px(90), Ui.Px(20));
-            int next = main.MinutesToNextAuto;
-            AddText(next < 0 ? I18n.T("setting.next.off") : I18n.T("setting.next", next),
-                pad + padIn, y + Ui.Px(88), w - padIn * 2, Ui.Px(20), 9f, FontStyle.Regular,
-                next < 0 ? Theme.Sub : Theme.Accent, false, true);
-            AddText(I18n.T("setting.auto.desc"), pad + padIn, y + Ui.Px(112), w - padIn * 2, Ui.Px(34), 9f, FontStyle.Regular, Theme.Sub, true, false);
+
+            // 触发方式:定时 / 智能
+            segAutoMode.SetBounds(pad + padIn, y + Ui.Px(50), Ui.Px(200), Ui.Px(34));
+
+            if (!St.SmartTrigger)
+            {
+                tbInterval.Visible = true;
+                AddText(I18n.T("setting.interval"), pad + padIn, y + Ui.Px(96), Ui.Px(120), Ui.Px(24), 9.5f, FontStyle.Regular, Theme.Sub, false, false);
+                frames.Add(new Rectangle(pad + w - padIn - Ui.Px(110), y + Ui.Px(90), Ui.Px(110), Ui.Px(34)));
+                tbInterval.SetBounds(pad + w - padIn - Ui.Px(110) + Ui.Px(10), y + Ui.Px(98), Ui.Px(90), Ui.Px(20));
+                int next = main.MinutesToNextAuto;
+                AddText(next < 0 ? I18n.T("setting.next.off") : I18n.T("setting.next", next),
+                    pad + padIn, y + Ui.Px(130), w - padIn * 2, Ui.Px(20), 9f, FontStyle.Regular,
+                    next < 0 ? Theme.Sub : Theme.Accent, false, true);
+                AddText(I18n.T("setting.auto.desc"), pad + padIn, y + Ui.Px(152), w - padIn * 2, Ui.Px(34), 9f, FontStyle.Regular, Theme.Sub, true, false);
+            }
+            else
+            {
+                // 智能模式:隐藏间隔输入,改为说明触发条件
+                tbInterval.Visible = false;
+                AddText(I18n.T("setting.trigger.desc", St.TriggerCommitPercent, St.TriggerLoadPercent, St.TriggerStandbyPercent, 20),
+                    pad + padIn, y + Ui.Px(94), w - padIn * 2, Ui.Px(52), 9f, FontStyle.Regular, Theme.Sub, true, false);
+                bool admin = MemoryEngine.IsAdmin;
+                string note = !admin ? I18n.T("setting.smart.admin")
+                    : (St.AutoOptimize ? I18n.T("setting.smart.on") : I18n.T("setting.next.off"));
+                AddText(note, pad + padIn, y + Ui.Px(152), w - padIn * 2, Ui.Px(20), 9f, FontStyle.Regular,
+                    !admin ? Theme.Warn : (St.AutoOptimize ? Theme.Accent : Theme.Sub), false, true);
+            }
             y += hA + Ui.Px(14);
 
             // ---- 自启 / 最小化 ----

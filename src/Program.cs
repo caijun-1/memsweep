@@ -20,6 +20,18 @@ namespace MemSweep
         [STAThread]
         private static void Main(string[] args)
         {
+            // 异常不再静默吞掉:至少留一条日志,便于用户回传
+            AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e)
+            {
+                Exception ex = e.ExceptionObject as Exception;
+                Log.Write("unhandled: " + (ex == null ? "unknown" : ex.GetType().Name + " " + ex.Message));
+            };
+            Application.ThreadException += delegate(object s, ThreadExceptionEventArgs e)
+            {
+                if (e.Exception != null)
+                    Log.Write("ui exception: " + e.Exception.GetType().Name + " " + e.Exception.Message);
+            };
+
             // 自检模式:不创建界面,跑完三档后写日志并退出
             if (HasArg(args, "--selftest"))
             {
@@ -36,6 +48,7 @@ namespace MemSweep
                 return;
             }
 
+            Log.Write("start admin=" + (MemoryEngine.IsAdmin ? "1" : "0"));
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
@@ -63,7 +76,7 @@ namespace MemSweep
                 return false;
             }
             catch (UnauthorizedAccessException) { }
-            catch (Exception) { }
+            catch (Exception ex) { Log.Write("mutex global failed: " + ex.Message); }
 
             try
             {
@@ -71,7 +84,18 @@ namespace MemSweep
                 mutex = new Mutex(true, MutexLocal, out owned);
                 return owned;
             }
-            catch (Exception) { return true; }
+            catch (Exception ex)
+            {
+                Log.Write("mutex local failed: " + ex.Message);
+                // 互斥体不可用时退回到窗口探测:已有窗口就认为实例已存在,
+                // 找不到才放行,避免因为一次权限异常就允许双开。
+                try
+                {
+                    if (Native.FindWindow(null, WindowTitle) != IntPtr.Zero) return false;
+                }
+                catch { }
+                return true;
+            }
         }
 
         private static void Release()
@@ -105,49 +129,111 @@ namespace MemSweep
         }
     }
 
-    /// <summary>无界面自检:跑一次标准档优化,前后数据写 %TEMP%\memsweep_selftest.log。</summary>
+    /// <summary>无界面自检:先断言触发逻辑,再跑一次标准档优化,结果写 %TEMP%\memsweep_selftest.log。</summary>
     internal static class SelfTest
     {
         public static int Run()
         {
             var sb = new StringBuilder();
             string path = Path.Combine(Path.GetTempPath(), "memsweep_selftest.log");
+            int fail = 0;
 
             try
             {
+                fail += AssertDecide(sb);
+
                 MemSample s0 = MemoryEngine.Sample();
                 sb.AppendLine("admin=" + (MemoryEngine.IsAdmin ? "yes" : "no"));
                 sb.AppendLine("before.avail=" + Mb(s0.AvailPhys) + " MB (" + Gb(s0.AvailPhys) + " GB)");
                 sb.AppendLine("before.load=" + s0.LoadPercent + "%");
                 sb.AppendLine("before.total=" + Mb(s0.TotalPhys) + " MB");
                 sb.AppendLine("before.committed=" + Mb(s0.CommitTotal) + " MB / " + Mb(s0.CommitLimit) + " MB");
+                sb.AppendLine("before.standby=" + Mb(s0.StandbyBytes) + " MB ("
+                              + s0.StandbyPercent.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "%)");
+                sb.AppendLine("decide=" + MemoryEngine.Decide(s0, new Settings()));
 
                 OptimizeResult r = MemoryEngine.Optimize(OptimizeLevel.Standard, null);
                 MemSample s1 = MemoryEngine.Sample();
 
                 sb.AppendLine("after.avail=" + Mb(s1.AvailPhys) + " MB (" + Gb(s1.AvailPhys) + " GB)");
                 sb.AppendLine("after.load=" + s1.LoadPercent + "%");
-                sb.AppendLine("released=" + Mb((ulong)r.Released) + " MB (" + Gb((ulong)r.Released) + " GB)");
+                sb.AppendLine("released=" + Mb((ulong)(r.Released > 0 ? r.Released : 0)) + " MB");
+                sb.AppendLine("  standby=" + Mb((ulong)(r.StandbyFreed > 0 ? r.StandbyFreed : 0)) + " MB");
+                sb.AppendLine("  cache=" + Mb((ulong)(r.CacheFreed > 0 ? r.CacheFreed : 0)) + " MB");
+                sb.AppendLine("  workingset=" + Mb((ulong)(r.WorkingSetFreed > 0 ? r.WorkingSetFreed : 0)) + " MB");
                 sb.AppendLine("trimmed=" + r.Touched + " skipped=" + r.Skipped + " cacheCleared=" + r.CacheCleared);
-                sb.AppendLine("done");
 
                 MemoryEngine.TrimSelf();
                 var me = Process.GetCurrentProcess();
                 me.Refresh();
                 sb.AppendLine("self.workingset=" + (me.WorkingSet64 / 1048576L) + " MB");
                 sb.AppendLine("self.private=" + (me.PrivateMemorySize64 / 1048576L) + " MB");
+                sb.AppendLine("log=" + Log.FilePath);
+                sb.AppendLine(fail == 0 ? "assert=OK" : "assert=FAIL(" + fail + ")");
+                sb.AppendLine("done");
             }
             catch (Exception ex)
             {
                 sb.AppendLine("error: " + ex.GetType().Name + " " + ex.Message);
                 sb.AppendLine(ex.StackTrace);
+                fail++;
             }
             finally
             {
                 try { File.WriteAllText(path, sb.ToString(), Encoding.UTF8); }
                 catch { }
             }
-            return 0;
+            return fail == 0 ? 0 : 2;
+        }
+
+        /// <summary>用构造样本断言智能触发,不依赖真实内存状态。</summary>
+        private static int AssertDecide(StringBuilder sb)
+        {
+            int fail = 0;
+            var st = new Settings();
+            var s = new MemSample();
+            s.TotalPhys = 8UL << 30;
+            s.CommitLimit = 16UL << 30;
+
+            // 1) 办公态:各项都低,不该触发
+            s.CommitTotal = 6UL << 30;
+            s.StandbyBytes = 1UL << 30;
+            s.LoadPercent = 45;
+            fail += Check(sb, "decide.idle", MemoryEngine.Decide(s, st) == TriggerReason.None);
+
+            // 2) 提交额度吃紧
+            s.CommitTotal = 15UL << 30;
+            fail += Check(sb, "decide.commit", MemoryEngine.Decide(s, st) == TriggerReason.Commit);
+
+            // 3) 备用列表占比高
+            s.CommitTotal = 6UL << 30;
+            s.StandbyBytes = 2UL << 30;
+            s.LoadPercent = 50;
+            fail += Check(sb, "decide.standby", MemoryEngine.Decide(s, st) == TriggerReason.Standby);
+
+            // 4) 物理负载高
+            s.StandbyBytes = 1UL << 30;
+            s.LoadPercent = 90;
+            fail += Check(sb, "decide.load", MemoryEngine.Decide(s, st) == TriggerReason.Load);
+
+            // 5) 空样本不能除零,也不能误触发
+            fail += Check(sb, "decide.empty", MemoryEngine.Decide(new MemSample(), st) == TriggerReason.None);
+            fail += Check(sb, "decide.null", MemoryEngine.Decide(null, st) == TriggerReason.None);
+
+            // 6) CommitLimit 缺失时跳过提交判据
+            var s2 = new MemSample();
+            s2.TotalPhys = 8UL << 30;
+            s2.CommitTotal = 100UL << 30;
+            s2.LoadPercent = 10;
+            fail += Check(sb, "decide.no-limit", MemoryEngine.Decide(s2, st) == TriggerReason.None);
+
+            return fail;
+        }
+
+        private static int Check(StringBuilder sb, string name, bool ok)
+        {
+            sb.AppendLine((ok ? "  PASS " : "  FAIL ") + name);
+            return ok ? 0 : 1;
         }
 
         private static string Mb(ulong bytes)

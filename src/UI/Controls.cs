@@ -298,6 +298,8 @@ namespace MemSweep.UI
 
         public event EventHandler CheckedChanged;
 
+        public Toggle() { Cursor = Cursors.Hand; }
+
         public bool Checked
         {
             get { return check; }
@@ -330,6 +332,12 @@ namespace MemSweep.UI
             if (Math.Abs(d) < 0.06f) { anim = target; t.Stop(); }
             else anim += d * 0.28f;
             Invalidate();
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left) Checked = !Checked;
+            base.OnMouseDown(e);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -620,6 +628,7 @@ namespace MemSweep.UI
             alpha = 0;
             ticks = 60;
             phase = 0;
+            UpdateRegion();
             Visible = true;
             BringToFront();
             if (t == null)
@@ -657,6 +666,24 @@ namespace MemSweep.UI
             base.WndProc(ref m);
         }
 
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            UpdateRegion();
+        }
+
+        /// <summary>把控件裁成胶囊形,否则圆角外的方形底会露出一个矩形框。</summary>
+        private void UpdateRegion()
+        {
+            if (Width <= 0 || Height <= 0) return;
+            using (GraphicsPath p = Ui.Round(new RectangleF(0, 0, Width, Height), Height / 2f))
+            {
+                Region old = Region;
+                Region = new Region(p);
+                if (old != null) old.Dispose();
+            }
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
@@ -666,7 +693,7 @@ namespace MemSweep.UI
 
             int a = alpha;
             Color bg = Theme.Dark ? Color.FromArgb(a, 38, 44, 54) : Color.FromArgb(a, 26, 29, 33);
-            var r = new RectangleF(0, 0, Width - 1, Height - 1);
+            var r = new RectangleF(0, 0, Width, Height);
             Ui.Fill(g, r, Height / 2f, bg);
             TextRenderer.DrawText(g, Text ?? "", Theme.F(9.5f, FontStyle.Regular), ClientRectangle,
                 Color.FromArgb(a, 255, 255, 255),

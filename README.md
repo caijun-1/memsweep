@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 <img src="docs/logo.png" width="96" alt="MemSweep">
 
@@ -6,13 +6,13 @@
 
 **轻量级 Windows 内存优化工具 · A lightweight memory optimizer for Windows**
 
-单文件 · 免安装 · 101 KB · 不联网 · 无遥测
+单文件 · 免安装 · 113 KB · 不联网 · 无遥测
 
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?logo=windows&logoColor=white)](https://github.com/caijun-1/memsweep/releases)
 [![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/download/dotnet-framework)
-[![Size](https://img.shields.io/badge/size-101%20KB-23C08A)](#)
+[![Size](https://img.shields.io/badge/size-113%20KB-23C08A)](#)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/caijun-1/memsweep/releases)
+[![Version](https://img.shields.io/badge/version-1.0.1-blue)](https://github.com/caijun-1/memsweep/releases)
 
 [简体中文](#中文文档) · [English](#english)
 
@@ -42,7 +42,7 @@
 
 MemSweep（中文名 **清忆**）是一款面向 Windows 的内存优化工具。它调用系统原生 API 释放进程工作集、清理文件缓存与待机内存列表，从而降低内存占用、提升可用内存。
 
-整个程序只有一个 **101 KB** 的 exe 文件，双击即用，不需要安装、不需要运行库、不写入系统目录。
+整个程序只有一个 **113 KB** 的 exe 文件，双击即用，不需要安装、不需要运行库、不写入系统目录。
 
 ## 实测效果
 
@@ -58,10 +58,11 @@ MemSweep（中文名 **清忆**）是一款面向 Windows 的内存优化工具�
 
 ## 特性
 
-- **单文件绿色版** — 101 KB，免安装，可放在 U 盘里直接用
+- **单文件绿色版** — 113 KB，免安装，可放在 U 盘里直接用
 - **极致低占用** — 私有内存约 17 MB，工作集约 40 MB
 - **三档优化** — 轻量 / 标准 / 深度，按需选择释放强度
-- **自动优化** — 可设置 5–360 分钟定时执行，推荐 30 分钟
+- **自动优化** — 定时（5–360 分钟）与智能触发两种模式；智能模式在内存紧张时按阈值自动执行，带 20 分钟冷却
+- **释放来源拆分** — 优化结果显示工作集 / 缓存 / 备用列表各释放了多少
 - **开机自启动** — 启动后最小化到托盘，不打扰日常使用
 - **虚拟内存设置** — 一键填入推荐参数，支持自定义初始/最大值
 - **中英双语** — 界面文字实时切换，无需重启
@@ -89,11 +90,23 @@ MemSweep（中文名 **清忆**）是一款面向 Windows 的内存优化工具�
 
 ### 自动优化
 
-在「设置 → 自动优化」中开启，间隔可设 5–360 分钟。
+在「设置 → 自动优化」中开启，支持两种模式：
+
+**定时模式** — 固定间隔执行，可设 5–360 分钟。
 
 **推荐 30 分钟。** 这是收益与代价的平衡点：间隔过短不会带来额外收益，反而会让程序频繁重新从磁盘加载被释放的页面，拖慢响应；超过 1 小时则意义有限。
 
-关闭主窗口时程序默认最小化到托盘，定时器继续工作；要彻底退出请在托盘右键菜单中选择「退出」。
+**智能触发** — 不按固定时间，而是持续观察内存压力，命中任一阈值时执行：
+
+| 条件 | 默认阈值 |
+| --- | --- |
+| 已提交内存占比 | 85% |
+| 内存负载 | 85% |
+| 待机列表占比 | 25% |
+
+为避免抖动，条件需**连续 3 次采样**都命中才会真正执行；执行后进入 **20 分钟冷却**，冷却期内不再触发。三个阈值都可以在设置页按机器情况自行调整。
+
+关闭主窗口时程序默认最小化到托盘，定时器与智能监控继续工作；要彻底退出请在托盘右键菜单中选择「退出」。
 
 ### 虚拟内存
 
@@ -165,6 +178,16 @@ memsweep/
 
 配置文件位于 `%APPDATA%\MemSweep\settings.ini`，删除该文件即可恢复默认设置。
 
+## 更新记录
+
+### 1.0.1
+
+- 修复：设置页的自动优化、开机自启、启动最小化等开关点击后不生效
+- 新增：智能触发模式，按已提交内存 / 内存负载 / 待机占比阈值自动优化
+- 新增：优化结果显示工作集、缓存、备用列表各自的释放量
+- 优化：设置页自动优化卡片高度随模式自适应，智能模式下展示阈值说明
+- 优化：Toast 提示改为真正的圆角胶囊，去掉外层矩形底
+
 ## 常见问题
 
 **优化后可用内存很快又降回去了？**
@@ -176,7 +199,7 @@ memsweep/
 **会自动结束进程来省内存吗？**
 不会，永远不会。程序只调用工作集整理，不触碰任何进程的生命周期。
 
-**为什么只有 101 KB？**
+**为什么只有 113 KB？**
 因为它就是原生 Win32 + .NET Framework 应用，没有打包浏览器内核、没有内嵌运行时、没有前端框架。
 
 **杀毒软件报毒？**
@@ -201,7 +224,7 @@ memsweep/
 
 MemSweep is a lightweight memory optimizer for Windows. It releases process working sets, trims the system file cache, and purges the standby memory list through native Windows APIs to lower memory usage and raise available memory.
 
-The entire application is a single **101 KB** executable. No installer, no runtime to download, no files written outside `%APPDATA%`.
+The entire application is a single **113 KB** executable. No installer, no runtime to download, no files written outside `%APPDATA%`.
 
 ## Measured results
 
@@ -217,10 +240,11 @@ One "Standard" pass on a Windows 11 machine with 16 GB of RAM:
 
 ## Features
 
-- **Single portable executable** — 101 KB, no installation, runs from a USB drive
+- **Single portable executable** — 113 KB, no installation, runs from a USB drive
 - **Tiny footprint** — about 17 MB private memory, 40 MB working set
 - **Three optimization levels** — Light / Standard / Deep
-- **Scheduled optimization** — every 5 to 360 minutes, 30 minutes recommended
+- **Automatic optimization** — scheduled (every 5 to 360 minutes) or smart trigger; smart mode runs when memory pressure crosses thresholds, with a 20-minute cooldown
+- **Release breakdown** — shows how much came from working sets, cache, and the standby list
 - **Run at startup** — starts minimized to the system tray
 - **Virtual memory settings** — one-click recommended values, or set custom sizes
 - **Chinese and English UI** — switch instantly, no restart required
@@ -246,13 +270,25 @@ Get the latest `MemSweep.exe` from [Releases](https://github.com/caijun-1/memswe
 
 Tap "Optimize now" and the amount released is shown immediately. If you want the full effect of the Deep level, make sure the app reports "Administrator" under Settings → About; otherwise the privileged steps are skipped silently instead of failing.
 
-### Scheduled optimization
+### Automatic optimization
 
-Enable it under Settings → Auto optimize. The interval can be set from 5 to 360 minutes.
+Enable it under Settings → Auto optimize. Two modes are available:
+
+**Scheduled** — runs at a fixed interval from 5 to 360 minutes.
 
 **30 minutes is recommended.** It is the balance point between benefit and cost: shorter intervals bring no extra benefit and force programs to reload pages from disk, while intervals beyond an hour rarely matter.
 
-Closing the main window minimizes to the tray and the timer keeps running. Use "Exit" in the tray menu to quit completely.
+**Smart trigger** — ignores the clock and watches memory pressure instead, firing when any threshold is crossed:
+
+| Condition | Default |
+| --- | --- |
+| Committed memory | 85% |
+| Memory load | 85% |
+| Standby list share | 25% |
+
+To avoid flapping, a condition must hold for **3 consecutive samples** before it runs, and a **20-minute cooldown** follows each run. All three thresholds are adjustable in the settings page.
+
+Closing the main window minimizes to the tray and both the timer and the smart monitor keep running. Use "Exit" in the tray menu to quit completely.
 
 ### Virtual memory
 
@@ -323,6 +359,16 @@ memsweep/
 
 Settings live in `%APPDATA%\MemSweep\settings.ini`. Delete the file to restore defaults.
 
+## Changelog
+
+### 1.0.1
+
+- Fixed: switches on the settings page (auto optimize, run at startup, start minimized) did not respond to clicks
+- Added: smart trigger mode driven by committed memory / memory load / standby share thresholds
+- Added: release breakdown by working sets, cache, and standby list
+- Improved: the auto-optimize card resizes to its mode and explains the thresholds in smart mode
+- Improved: toast is now a true rounded pill with no rectangular backdrop
+
 ## FAQ
 
 **Available memory drops again shortly after optimizing.**
@@ -334,7 +380,7 @@ Purging the standby list requires administrator rights. Run the app as administr
 **Does it kill processes to free memory?**
 No, never. It only trims working sets and never touches process lifetimes.
 
-**Why is it only 101 KB?**
+**Why is it only 113 KB?**
 It is a native Win32 + .NET Framework application with no browser engine, no embedded runtime, and no front-end framework.
 
 **Antivirus flags it.**

@@ -25,6 +25,11 @@ namespace MemSweep
         public OptimizeLevel Level = OptimizeLevel.Standard;
         public bool AutoOptimize = false;
         public int AutoInterval = 30;
+        /// <summary>true = 智能触发(按内存压力),false = 固定间隔。</summary>
+        public bool SmartTrigger = false;
+        public int TriggerCommitPercent = 85;
+        public int TriggerLoadPercent = 85;
+        public int TriggerStandbyPercent = 25;
         public bool AutoStart = false;
         public bool StartMinimized = false;
         public long TotalReleased = 0;
@@ -64,6 +69,11 @@ namespace MemSweep
                         case "interval":
                         case "interval_min":
                         case "auto_interval": s.AutoInterval = Math.Max(5, Math.Min(360, Int(v, 30))); break;
+                        case "smart":
+                        case "smart_trigger": s.SmartTrigger = v == "1" || v == "true"; break;
+                        case "trig_commit": s.TriggerCommitPercent = Math.Max(50, Math.Min(99, Int(v, 85))); break;
+                        case "trig_load": s.TriggerLoadPercent = Math.Max(50, Math.Min(99, Int(v, 85))); break;
+                        case "trig_standby": s.TriggerStandbyPercent = Math.Max(3, Math.Min(60, Int(v, 25))); break;
                         case "autostart": s.AutoStart = v == "1" || v == "true"; break;
                         case "startmin":
                         case "start_minimized": s.StartMinimized = v == "1" || v == "true"; break;
@@ -92,6 +102,10 @@ namespace MemSweep
                 lines.Add("level=" + (Level == OptimizeLevel.Light ? "light" : Level == OptimizeLevel.Deep ? "deep" : "standard"));
                 lines.Add("auto=" + (AutoOptimize ? "1" : "0"));
                 lines.Add("interval=" + AutoInterval.ToString(CultureInfo.InvariantCulture));
+                lines.Add("smart=" + (SmartTrigger ? "1" : "0"));
+                lines.Add("trig_commit=" + TriggerCommitPercent.ToString(CultureInfo.InvariantCulture));
+                lines.Add("trig_load=" + TriggerLoadPercent.ToString(CultureInfo.InvariantCulture));
+                lines.Add("trig_standby=" + TriggerStandbyPercent.ToString(CultureInfo.InvariantCulture));
                 lines.Add("autostart=" + (AutoStart ? "1" : "0"));
                 lines.Add("startmin=" + (StartMinimized ? "1" : "0"));
                 lines.Add("total_freed=" + TotalReleased.ToString(CultureInfo.InvariantCulture));
@@ -159,6 +173,49 @@ namespace MemSweep
             public bool Automatic;
             public string[] Entries;
             public string Display;
+            /// <summary>是否存在系统盘以外的分页文件。写入时必须保留它们。</summary>
+            public bool HasOtherDrive;
+        }
+
+        /// <summary>系统盘符,形如 "C:"。</summary>
+        private static string SystemDrive
+        {
+            get { return (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").ToUpperInvariant(); }
+        }
+
+        /// <summary>判断一条 PagingFiles 记录是否属于系统盘。</summary>
+        public static bool IsSystemDriveEntry(string entry)
+        {
+            if (string.IsNullOrEmpty(entry)) return false;
+            string t = entry.Trim();
+            if (t.Length < 2 || t[1] != ':') return false;
+            // "?:\pagefile.sys" 表示由系统选择卷,实际就是系统盘
+            if (t[0] == '?') return true;
+            return t.Substring(0, 2).ToUpperInvariant() == SystemDrive;
+        }
+
+        /// <summary>把一条记录格式化成 "C: 4096–8192 MB" 这种可读形式。</summary>
+        private static string Describe(string entry)
+        {
+            string[] parts = entry.Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) return entry;
+            // "?:\pagefile.sys" 里的 "?" 指系统盘,显示时换成真实盘符
+            string drive = parts[0][0] == '?' ? SystemDrive + parts[0].Substring(1) : parts[0];
+            if (parts.Length >= 3)
+            {
+                int init, mx;
+                if (int.TryParse(parts[parts.Length - 2], NumberStyles.Integer, CultureInfo.InvariantCulture, out init) &&
+                    int.TryParse(parts[parts.Length - 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out mx))
+                {
+                    if (drive.Length >= 2)
+                        return drive.Substring(0, 2) + "  " + init + " – " + mx + " MB";
+                    return init + " – " + mx + " MB";
+                }
+            }
+            // 没有大小字段:由系统按需分配
+            if (drive.Length >= 2 && drive[1] == ':')
+                return drive.Substring(0, 2) + "  " + I18n.T("pagefile.managed");
+            return entry;
         }
 
         /// <summary>读取虚拟内存状态:优先用 WMI 判断是否"系统自动管理",失败则退回注册表推断。</summary>
@@ -200,23 +257,22 @@ namespace MemSweep
             if (st.Entries.Length == 0) automatic = true;
 
             st.Automatic = automatic;
+            if (st.Entries.Length > 0)
+            {
+                var parts = new List<string>();
+                foreach (string e in st.Entries)
+                {
+                    if (!IsSystemDriveEntry(e)) st.HasOtherDrive = true;
+                    if (!string.IsNullOrEmpty(e)) parts.Add(Describe(e));
+                }
+                st.Display = string.Join("  ·  ", parts.ToArray());
+            }
+
+            // 系统自动管理时,注册表里的 "?:\pagefile.sys" 不代表固定大小,直接说明状态
             if (automatic)
-            {
                 st.Display = I18n.T("pagefile.auto");
-            }
-            else if (st.Entries.Length > 0)
-            {
-                // PagingFiles 形如 "C:\pagefile.sys 4096 8192",取后两个数字显示
-                string[] parts = st.Entries[0].Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-                int init, mx;
-                if (parts.Length >= 3 &&
-                    int.TryParse(parts[parts.Length - 2], NumberStyles.Integer, CultureInfo.InvariantCulture, out init) &&
-                    int.TryParse(parts[parts.Length - 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out mx))
-                    st.Display = I18n.T("pagefile.custom", init, mx);
-                else
-                    st.Display = st.Entries[0];
-            }
-            else st.Display = I18n.T("pagefile.unknown");
+            else if (st.Entries.Length == 0)
+                st.Display = I18n.T("pagefile.unknown");
             return st;
         }
 
@@ -233,7 +289,10 @@ namespace MemSweep
             if (maximum > 16384) maximum = 16384;
         }
 
-        /// <summary>写入 PagingFiles 并关闭"自动管理"。需要管理员权限。</summary>
+        /// <summary>
+        /// 写入系统盘分页文件并关闭"自动管理"。需要管理员权限。
+        /// 只替换系统盘那一条,其它磁盘上的分页文件原样保留——否则会删掉用户自己的配置。
+        /// </summary>
         public static bool ApplyPageFile(int initialMb, int maximumMb)
         {
             try
@@ -241,9 +300,27 @@ namespace MemSweep
                 using (RegistryKey k = Registry.LocalMachine.OpenSubKey(MmKey, true))
                 {
                     if (k == null) return false;
-                    string entry = "C:\\pagefile.sys " + initialMb.ToString(CultureInfo.InvariantCulture)
+
+                    var kept = new List<string>();
+                    string[] old = k.GetValue("PagingFiles") as string[];
+                    if (old != null)
+                    {
+                        foreach (string raw in old)
+                        {
+                            if (string.IsNullOrEmpty(raw)) continue;
+                            string t = raw.Trim();
+                            if (t.Length == 0) continue;
+                            if (IsSystemDriveEntry(t)) continue; // 只丢掉系统盘旧值
+                            kept.Add(t);                         // 其它磁盘保留
+                        }
+                    }
+
+                    string entry = SystemDrive + "\\pagefile.sys "
+                                   + initialMb.ToString(CultureInfo.InvariantCulture)
                                    + " " + maximumMb.ToString(CultureInfo.InvariantCulture);
-                    k.SetValue("PagingFiles", new string[] { entry }, RegistryValueKind.MultiString);
+                    kept.Insert(0, entry);
+                    k.SetValue("PagingFiles", kept.ToArray(), RegistryValueKind.MultiString);
+                    Log.Write("pagefile apply " + entry + " kept=" + (kept.Count - 1));
                 }
                 try
                 {

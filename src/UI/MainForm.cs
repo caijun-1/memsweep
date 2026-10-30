@@ -128,6 +128,11 @@ namespace MemSweep.UI
         private long lastReleased = -1;
         private ulong sessionReleased;
         private DateTime lastAuto = DateTime.Now;
+        private int smartStreak;
+        private const int SmartStreakNeed = 3;
+        private const int SmartCooldownMin = 20;
+        // 上次优化的三项来源,用于拆开显示;负值表示本次运行还没有数据
+        private long lastStandby = -1, lastCache = -1, lastWs = -1;
         private bool allowVisible;
         private bool exiting;
 
@@ -137,7 +142,7 @@ namespace MemSweep.UI
         private SettingsPage pageSet;
         private RingGauge gauge;
         private StatCard cTotal, cAvail, cCommit, cCache;
-        private TextLabel lblLevel, lblLast, lblStatus, lblTotal, lblChart;
+        private TextLabel lblLevel, lblLast, lblStatus, lblTotal, lblChart, lblBreakdown;
         private Segmented segLevel;
         private FlatButton btnOptimize;
         private Card chartCard;
@@ -265,6 +270,15 @@ namespace MemSweep.UI
             lblLast.Align = ContentAlignment.MiddleRight;
             pageOpt.Controls.Add(lblLast);
 
+            // 释放来源拆分:备用 / 缓存 / 工作集,避免一个总数说不清
+            lblBreakdown = new TextLabel();
+            lblBreakdown.Size = 8.5f;
+            lblBreakdown.ForeColor = Theme.Faint;
+            lblBreakdown.BackColor = Theme.Bg;
+            lblBreakdown.Align = ContentAlignment.MiddleLeft;
+            lblBreakdown.Text = "";
+            pageOpt.Controls.Add(lblBreakdown);
+
             chartCard = new Card();
             chartCard.BackColor = Theme.Bg;
             pageOpt.Controls.Add(chartCard);
@@ -366,8 +380,12 @@ namespace MemSweep.UI
             y += Ui.Px(34) + Ui.Px(16);
             btnOptimize.SetBounds(pad, y, pw, Ui.Px(46));
 
+            // 按钮下方:释放来源拆分
+            int bdY = y + Ui.Px(46) + Ui.Px(6);
+            lblBreakdown.SetBounds(pad, bdY, pw, Ui.Px(18));
+
             // 底部折线图:锚定在页面底部,高度自适应并限制在 100–160
-            int chartH = bodyH - pad - (y + Ui.Px(46) + Ui.Px(20));
+            int chartH = bodyH - pad - (bdY + Ui.Px(18) + Ui.Px(12));
             if (chartH > Ui.Px(160)) chartH = Ui.Px(160);
             if (chartH < Ui.Px(100)) chartH = Ui.Px(100);
             int chartY = bodyH - pad - chartH;
@@ -395,6 +413,8 @@ namespace MemSweep.UI
             spark.BackColor = Theme.Card;
             lblLevel.BackColor = Theme.Bg;
             lblLast.BackColor = Theme.Bg;
+            lblBreakdown.BackColor = Theme.Bg;
+            lblBreakdown.ForeColor = Theme.Faint;
             lblStatus.BackColor = Theme.Bg;
             segLevel.BackColor = Theme.Bg;
             btnOptimize.BackColor = Theme.Bg;
@@ -461,6 +481,16 @@ namespace MemSweep.UI
             st.AutoInterval = Math.Max(5, Math.Min(360, interval));
             st.Save();
             lastAuto = DateTime.Now;
+            smartStreak = 0;
+        }
+
+        /// <summary>切换自动优化方式:true = 智能触发(看内存压力),false = 固定间隔。</summary>
+        public void SetAutoMode(bool smart)
+        {
+            st.SmartTrigger = smart;
+            st.Save();
+            lastAuto = DateTime.Now;
+            smartStreak = 0;
         }
 
         public void SetLevel(OptimizeLevel lv)
@@ -477,8 +507,28 @@ namespace MemSweep.UI
             if (s.TotalPhys > 0) sample = s;
             UpdateSampleUi();
 
-            if (st.AutoOptimize && !busy &&
-                (DateTime.Now - lastAuto).TotalMinutes >= st.AutoInterval)
+            if (!st.AutoOptimize || busy) return;
+            if (st.SmartTrigger)
+            {
+                // 冷却期内不计连击,避免刚清完就立刻再次触发
+                if ((DateTime.Now - lastAuto).TotalMinutes < SmartCooldownMin)
+                {
+                    smartStreak = 0;
+                    return;
+                }
+                TriggerReason why = MemoryEngine.Decide(sample, st);
+                if (why == TriggerReason.None) { smartStreak = 0; return; }
+                smartStreak++;
+                if (smartStreak < SmartStreakNeed) return;
+                smartStreak = 0;
+                lastAuto = DateTime.Now;
+                Log.Write("smart trigger " + why
+                    + " commit=" + sample.CommitPercent.ToString("0.0")
+                    + " standby=" + sample.StandbyPercent.ToString("0.0")
+                    + " load=" + sample.LoadPercent);
+                RunSmart(why);
+            }
+            else if ((DateTime.Now - lastAuto).TotalMinutes >= st.AutoInterval)
             {
                 lastAuto = DateTime.Now;
                 RunOptimize(st.Level, true);
@@ -512,6 +562,9 @@ namespace MemSweep.UI
         private void UpdateLastLabel()
         {
             lblLast.Text = lastReleased < 0 ? I18n.T("last.none") : I18n.T("last.released", Fmt.Bytes3((ulong)lastReleased));
+            if (lblBreakdown == null) return;
+            lblBreakdown.Text = lastStandby < 0 ? "" : I18n.T("breakdown",
+                Fmt.Bytes3((ulong)lastStandby), Fmt.Bytes3((ulong)lastCache), Fmt.Bytes3((ulong)lastWs));
         }
 
         // ---------------- 优化 ----------------
@@ -541,6 +594,24 @@ namespace MemSweep.UI
                 });
         }
 
+        /// <summary>智能触发:只清文件缓存和备用列表,不裁工作集,所以不弹确认也不抢按钮文案。</summary>
+        private void RunSmart(TriggerReason why)
+        {
+            if (busy) return;
+            busy = true;
+            btnOptimize.Busy = true;
+            btnOptimize.Enabled = false;
+
+            TriggerReason r = why;
+            Task.Factory.StartNew(delegate { return MemoryEngine.SmartClean(r, null); })
+                .ContinueWith(delegate(Task<OptimizeResult> t)
+                {
+                    if (t.Status != TaskStatus.RanToCompletion) return;
+                    try { BeginInvoke(new Action<OptimizeResult>(OnOptimized), new object[] { t.Result }); }
+                    catch { }
+                });
+        }
+
         private void OnOptimized(OptimizeResult r)
         {
             if (IsDisposed) return;
@@ -548,6 +619,10 @@ namespace MemSweep.UI
             btnOptimize.Busy = false;
             btnOptimize.Enabled = true;
             btnOptimize.Text = I18n.T("btn.optimize");
+
+            lastStandby = r.StandbyFreed;
+            lastCache = r.CacheFreed;
+            lastWs = r.WorkingSetFreed;
 
             if (r.Released > 0)
             {
@@ -590,12 +665,13 @@ namespace MemSweep.UI
             base.OnFormClosing(e);
         }
 
-        /// <summary>距下次自动优化的分钟数;自动优化关闭时返回 -1。</summary>
+        /// <summary>距下次自动优化的分钟数;自动优化关闭或智能模式时返回 -1。</summary>
         public int MinutesToNextAuto
         {
             get
             {
                 if (!st.AutoOptimize) return -1;
+                if (st.SmartTrigger) return -1;
                 double m = st.AutoInterval - (DateTime.Now - lastAuto).TotalMinutes;
                 if (m < 0) m = 0;
                 return (int)Math.Ceiling(m);
@@ -683,7 +759,7 @@ namespace MemSweep.UI
             Size csz = TextRenderer.MeasureText(g, "清忆", Theme.F(10f, FontStyle.Regular),
                 new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
             var verRect = new Rectangle(cnRect.X + csz.Width + Ui.Px(8), 0, (int)Ui.Fp(58), Ui.Px(44));
-            TextRenderer.DrawText(g, "v1.0.0", Theme.F(8f, FontStyle.Regular), verRect, Theme.Faint,
+            TextRenderer.DrawText(g, "v1.0.1", Theme.F(8f, FontStyle.Regular), verRect, Theme.Faint,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
 
             // 标题栏下分隔线

@@ -62,8 +62,11 @@ namespace MemSweep
         }
 
         // ---------- 常量 ----------
+        public const uint PROCESS_QUERY_INFORMATION = 0x0400;
         public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
         public const uint PROCESS_SET_QUOTA = 0x0100;
+        public const int GWL_EXSTYLE = -20;
+        public const int WS_EX_TOOLWINDOW = 0x00000080;
         public const uint TOKEN_ADJUST_PRIVILEGES = 0x0020;
         public const uint TOKEN_QUERY = 0x0008;
         public const uint SE_PRIVILEGE_ENABLED = 0x0002;
@@ -74,6 +77,9 @@ namespace MemSweep
         public const int MemoryEmptyWorkingSets = 2;
         public const int MemoryFlushModifiedList = 3;
         public const int MemoryPurgeStandbyList = 4;
+
+        /// <summary>NtQuerySystemInformation 缓冲区不足:按 ReturnLength 重新分配再查。</summary>
+        public const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
 
         public const int WM_NCHITTEST = 0x0084;
         public const int WM_DPICHANGED = 0x02E0;
@@ -116,6 +122,9 @@ namespace MemSweep
         [DllImport("ntdll.dll")]
         public static extern int NtSetSystemInformation(int SystemInformationClass, IntPtr SystemInformation, int SystemInformationLength);
 
+        [DllImport("ntdll.dll")]
+        public static extern int NtQuerySystemInformation(int SystemInformationClass, IntPtr SystemInformation, int SystemInformationLength, out int ReturnLength);
+
         // ---------- advapi32 ----------
         [DllImport("advapi32.dll", SetLastError = true)]
         public static extern bool OpenProcessToken(IntPtr ProcessHandle, uint DesiredAccess, out IntPtr TokenHandle);
@@ -154,6 +163,20 @@ namespace MemSweep
 
         [DllImport("user32.dll")]
         public static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int GetWindowTextLength(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
         // 第二个实例用它唤醒已有实例(即使窗口隐藏在托盘)
         public static readonly int WM_SHOWME = (int)RegisterWindowMessage("MemSweep_ShowWindow");
